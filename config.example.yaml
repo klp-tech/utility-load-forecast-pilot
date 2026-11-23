@@ -1,0 +1,36 @@
+# Copy to config.yaml and edit for your own system. With no config.yaml, every script
+# uses this file, which runs the synthetic demo end to end.
+
+site:
+  name: Demo Utility (synthetic)
+  # One representative point for weather. Any location works; this is Burlington, VT.
+  latitude: 44.48
+  longitude: -73.21
+  timezone: America/New_York
+
+data:
+  # Hourly load: columns ts (local time, hour-beginning) and load_mw.
+  # Produced by prep.py from your raw meter export, or by make_demo_data.py.
+  load_csv: data/load_hourly.csv
+  weather_csv: data/weather_hourly.csv          # weather.py
+  forecast_csv: data/weather_forecast_hourly.csv  # weather_forecast.py
+
+weather:
+  archive_start: "2022-01-01"   # actual weather history (ERA5 reanalysis)
+  forecast_start: "2025-05-01"  # archived day-ahead forecasts must cover your test windows
+
+backtest:
+  horizon_hours: 168            # 7 days
+  context_hours: 8192           # history given to Chronos (~11 months; the model maximum)
+  lags_hours: [0, 24, 48]       # data delay: hours between the last reading and the forecast
+  windows:                      # test windows; forecasts start at every local midnight
+    - {name: Summer 2025, start: "2025-06-01", end: "2025-09-15"}
+    - {name: Winter 2025-26, start: "2025-12-01", end: "2026-02-28"}
+  models: [naive_week, regression_fx, chronos, chronos_wx_fx, chronos_wx_actual]
+  chronos_model: amazon/chronos-2
+
+demo:                           # make_demo_data.py only
+  start: "2022-01-01"
+  mean_mw: 15.0
+  growth_per_year: 0.02
+  seed: 7

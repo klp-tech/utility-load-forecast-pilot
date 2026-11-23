@@ -1,0 +1,10 @@
+# Install PyTorch first for your hardware: https://pytorch.org/get-started/locally/
+# (a CPU-only build works; an NVIDIA GPU with 8 GB is plenty)
+chronos-forecasting>=2.3
+pandas>=2.2
+numpy
+matplotlib
+openpyxl
+requests
+pyyaml
+tabulate
