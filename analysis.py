@@ -23,10 +23,13 @@ from common import ROOT, load_config  # noqa: E402
 OUT = ROOT / "output" / "report"
 INK, INK2, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 COLOR = {"chronos_wx_fx": "#2a78d6", "chronos": "#eb6834", "regression_fx": "#1baf7a",
-         "naive_week": "#eda100", "chronos_wx_actual": "#e87ba4"}
+         "naive_week": "#eda100", "chronos_wx_actual": "#e87ba4",
+         "chronos_feat_fx": "#4a3aa7", "regression_trend_fx": "#0d7d61", "avg_chronos_reg": "#0b0b0b"}
 LABEL = {"chronos_wx_fx": "Chronos-2 + forecast weather", "chronos": "Chronos-2, load only",
          "regression_fx": "Weather regression", "naive_week": "Same hour last week",
-         "chronos_wx_actual": "Chronos-2 + actual weather (bound)"}
+         "chronos_wx_actual": "Chronos-2 + actual weather (bound)",
+         "chronos_feat_fx": "Chronos-2 + weather + degree-hours", "regression_trend_fx":
+         "Weather regression + trend", "avg_chronos_reg": "Average: Chronos-2 features + regression"}
 ORDER = list(LABEL)[::-1]
 plt.rcParams.update({"font.size": 9, "axes.spines.top": False, "axes.spines.right": False,
                      "axes.edgecolor": INK2, "xtick.color": INK2, "ytick.color": INK2})

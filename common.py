@@ -50,6 +50,30 @@ def us_holidays(years) -> dict[pd.Timestamp, str]:
     return out
 
 
+FEAT_EXTRA = ["cdh", "hdh", "weekend", "holiday"]
+
+
+def add_features(w: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """Derived inputs: cooling/heating degree-hours, weekend and holiday flags.
+
+    Degree-hours hand the model the bend in the temperature-to-load curve (air conditioning
+    above `cool_base_f`, heating below `heat_base_f`). Raw temperature alone does not, and
+    foundation models take their inputs roughly linearly.
+    """
+    f = cfg.get("features", {})
+    w = w.copy()
+    t = w["temp_f"].astype(float)
+    w["cdh"] = (t - f.get("cool_base_f", 65)).clip(lower=0)
+    w["hdh"] = (f.get("heat_base_f", 55) - t).clip(lower=0)
+    w["weekend"] = (w.index.dayofweek >= 5).astype(float)
+    if f.get("holidays", "us") == "us":
+        hol = us_holidays(range(w.index.min().year, w.index.max().year + 1))
+        w["holiday"] = w.index.normalize().isin(list(hol)).astype(float)
+    else:
+        w["holiday"] = 0.0
+    return w
+
+
 def utc_to_local_hourly(df: pd.DataFrame, time_col: str, cols: list[str], tz: str) -> pd.DataFrame:
     """UTC timestamps -> naive local hour-beginning, regular hourly index.
 

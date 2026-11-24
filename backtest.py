@@ -11,6 +11,13 @@ using only what would have been known then, and score against what happened.
   chronos_wx_fx      Chronos-2 + archived weather forecast as known-future covariates
   chronos_wx_actual  Chronos-2 + the weather that actually happened. UPPER BOUND ONLY: no live
                      system has this. It shows what weather-forecast error costs. Run at lag 0.
+  chronos_feat_fx    Chronos-2 + weather + derived inputs (cooling/heating degree-hours,
+                     weekend, holiday; common.add_features)
+  regression_trend_fx  regression_fx + a linear time trend (load growth) + holiday flag
+  avg_chronos_reg    equal-weight mean of chronos_feat_fx and regression_trend_fx. The two
+                     tend to err in opposite directions on extreme days (a foundation model
+                     under-reacts to heat beyond its context, a cubic regression over-reacts),
+                     so their average can beat both
 
 Data delay: each `lags_hours` value re-runs the backtest with the last load reading that many
 hours before the origin. Weather in that gap is observed (it has happened); the future is the
@@ -31,13 +38,15 @@ import pandas as pd  # noqa: E402
 import torch  # noqa: E402
 from chronos import Chronos2Pipeline  # noqa: E402
 
-from common import ROOT, WX, load_config, p, read_hourly  # noqa: E402
+from common import FEAT_EXTRA, ROOT, WX, add_features, load_config, p, read_hourly  # noqa: E402
+
+FEAT = WX + FEAT_EXTRA
 
 
 class Run:
     def __init__(self, cfg, df, pipe):
         b = cfg["backtest"]
-        self.df, self.pipe = df, pipe
+        self.cfg, self.df, self.pipe = cfg, df, pipe
         self.H, self.ctx = b["horizon_hours"], b["context_hours"]
         self.lag = 0
 
@@ -72,29 +81,36 @@ class Run:
             out[o] = pd.DataFrame({"p50": self.df["load_mw"].reindex(src).values}, index=idx)
         return out
 
-    @staticmethod
-    def _design(w: pd.DataFrame) -> np.ndarray:
+    def _design(self, w: pd.DataFrame, t0=None) -> np.ndarray:
         t = w["temp_f"].to_numpy(dtype=float)
-        return np.column_stack([np.ones(len(w)), t, t**2, t**3, w["dewpoint_f"], w["cloud_pct"],
-                                w["solar_wm2"], (w.index.day_of_week >= 5).astype(float)]).astype(float)
+        cols = [np.ones(len(w)), t, t**2, t**3, w["dewpoint_f"], w["cloud_pct"],
+                w["solar_wm2"], (w.index.day_of_week >= 5).astype(float)]
+        if t0 is not None:  # trend (years from the window start) + holiday flag
+            cols += [((w.index - t0) / pd.Timedelta(days=365.25)).to_numpy(dtype=float),
+                     add_features(w[WX], self.cfg)["holiday"].to_numpy()]
+        return np.column_stack(cols).astype(float)
 
-    def regression_fx(self, origins, win_start):
+    def regression_fx(self, origins, win_start, trend=False):
+        t0 = win_start if trend else None
         tr = self.df.loc[win_start - pd.Timedelta(days=730): win_start - pd.Timedelta(hours=1),
                          ["load_mw"] + WX].dropna()
         coef = {}
         for hr in range(24):
             x = tr[tr.index.hour == hr]
-            coef[hr], *_ = np.linalg.lstsq(self._design(x), x["load_mw"].to_numpy(), rcond=None)
+            coef[hr], *_ = np.linalg.lstsq(self._design(x, t0), x["load_mw"].to_numpy(), rcond=None)
         out = {}
         for o in origins:
             w = self.fx_frame(o).loc[o:]
-            x = self._design(w)
+            x = self._design(w, t0)
             out[o] = pd.DataFrame({"p50": [x[i] @ coef[t.hour] for i, t in enumerate(w.index)]},
                                   index=w.index)
         return out
 
-    def chronos(self, origins, future=None):
-        covs = WX if future is not None else []
+    def fx_feat_frame(self, o):
+        return add_features(self.fx_frame(o), self.cfg)
+
+    def chronos(self, origins, future=None, covs=WX):
+        covs = covs if future is not None else []
         hist, fut = [], []
         for o in origins:
             cut = o - pd.Timedelta(hours=self.lag)
@@ -103,7 +119,7 @@ class Run:
             h["item_id"] = f"{o:%Y-%m-%d}"
             hist.append(h)
             if future is not None:
-                fut.append(future(o)[WX].assign(item_id=f"{o:%Y-%m-%d}"))
+                fut.append(future(o)[covs].assign(item_id=f"{o:%Y-%m-%d}"))
         pred = self.pipe.predict_df(
             pd.concat(hist).rename_axis("ts").reset_index(),
             future_df=pd.concat(fut).rename_axis("ts").reset_index() if fut else None,
@@ -147,6 +163,7 @@ def main() -> None:
     df = df.join(read_hourly(p(cfg, cfg["data"]["weather_csv"]))[WX], how="left")
     df = df.join(read_hourly(p(cfg, cfg["data"]["forecast_csv"])), how="left")
     df["load_mw"] = df["load_mw"].interpolate(limit_area="inside")
+    df = df.join(add_features(df[WX], cfg)[FEAT_EXTRA])  # history inputs: actual weather
     pipe = Chronos2Pipeline.from_pretrained(
         b["chronos_model"], device_map="cuda" if torch.cuda.is_available() else "cpu")
     run = Run(cfg, df, pipe)
@@ -172,11 +189,22 @@ def main() -> None:
                 "chronos": lambda: run.chronos(origins),
                 "chronos_wx_fx": lambda: run.chronos(origins, run.fx_frame),
                 "chronos_wx_actual": lambda: run.chronos(origins, run.actual_frame),
+                "chronos_feat_fx": lambda: run.chronos(origins, run.fx_feat_frame, FEAT),
+                "regression_trend_fx": lambda: run.regression_fx(origins, ws, trend=True),
             }
+            built = {}
             for m in b["models"]:
                 if m == "chronos_wx_actual" and lag != 0:
                     continue
-                fc = builders[m]()
+                if m == "avg_chronos_reg":
+                    for need in ("chronos_feat_fx", "regression_trend_fx"):
+                        if need not in built:
+                            built[need] = builders[need]()
+                    fc = {o: ((built["chronos_feat_fx"][o][["p50"]] +
+                               built["regression_trend_fx"][o][["p50"]]) / 2) for o in origins}
+                else:
+                    fc = built[m] if m in built else builders[m]()
+                    built[m] = fc
                 for o in origins:
                     f = fc[o]
                     rows.append({"lag_h": lag, "window": w["name"], "model": m, "origin": o.date(),

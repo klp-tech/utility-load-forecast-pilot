@@ -18,6 +18,16 @@ data:
 weather:
   archive_start: "2022-01-01"   # actual weather history (ERA5 reanalysis)
   forecast_start: "2025-05-01"  # archived day-ahead forecasts must cover your test windows
+  # Open-Meteo weather model(s) for the archived forecast; several are averaged hour by hour.
+  # best_match is Open-Meteo's automatic pick, which is not always the most accurate model for
+  # a given site. Compare candidates against a nearby airport station before choosing.
+  forecast_models: [best_match]
+  # e.g. forecast_models: [ecmwf_ifs025, ecmwf_aifs025_single]
+
+features:                       # derived inputs (common.add_features)
+  cool_base_f: 65               # cooling degree-hours above this temperature
+  heat_base_f: 55               # heating degree-hours below this temperature
+  holidays: us                  # us = US federal holidays; none = no holiday flag
 
 backtest:
   horizon_hours: 168            # 7 days
@@ -26,8 +36,14 @@ backtest:
   windows:                      # test windows; forecasts start at every local midnight
     - {name: Summer 2025, start: "2025-06-01", end: "2025-09-15"}
     - {name: Winter 2025-26, start: "2025-12-01", end: "2026-02-28"}
-  models: [naive_week, regression_fx, chronos, chronos_wx_fx, chronos_wx_actual]
+  models: [naive_week, regression_fx, chronos, chronos_wx_fx, chronos_wx_actual,
+           chronos_feat_fx, regression_trend_fx, avg_chronos_reg]
   chronos_model: amazon/chronos-2
+
+compare:                        # compare_models.py: install only the models you list
+  models: [chronos2, timesfm25, t0, tirex2, timestral]   # + kumo (needs kumo_dir)
+  lag_hours: 24                 # data delay for the comparison
+  kumo_dir: null                # path to a clone of NVIDIA/Kumo-TS/Kumo-Forecast
 
 demo:                           # make_demo_data.py only
   start: "2022-01-01"

@@ -6,3 +6,8 @@ data/
 output/
 config.yaml
 *.log
+
+# Model checkpoints some packages download into the working folder (e.g. Kumo-Forecast)
+*.pt
+*.pkl
+*.safetensors

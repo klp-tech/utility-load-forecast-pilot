@@ -8,9 +8,11 @@ An honest test bench for one question a small utility would ask: **can a free, o
 forecasting model, run on hardware you already own, forecast your system load better than the
 simple methods you'd otherwise use, and where does it fail?**
 
-The model is Amazon's open-weight time-series foundation model
-[Chronos-2](https://huggingface.co/amazon/chronos-2) (Apache-2.0). It is used **zero-shot**: no
-training on your data. Everything runs locally, and no utility data leaves your machine.
+The main model is Amazon's open-weight time-series foundation model
+[Chronos-2](https://huggingface.co/amazon/chronos-2) (Apache-2.0). `compare_models.py` runs five
+more, from Google, The Forecasting Company, NX-AI, Mistral and NVIDIA, on the same footing (see
+[MODELS.md](MODELS.md) for licences). All are used **zero-shot**: no training on your data.
+Everything runs locally, and no utility data leaves your machine.
 
 ## What makes the test honest
 
@@ -41,7 +43,11 @@ python make_demo_data.py     # SYNTHETIC hourly load driven by that weather
 python weather_forecast.py   # archived day-ahead weather forecasts
 python backtest.py           # all models x all data delays  -> output/
 python analysis.py           # tables and figures            -> output/report/
+python compare_models.py     # optional: six foundation models -> output/compare/
 ```
+
+`compare_models.py` needs each model's package installed (see [MODELS.md](MODELS.md)); list only
+the ones you want under `compare.models`.
 
 The synthetic load is a stand-in to show how the pipeline runs. It has a realistic weather
 response, daily and weekly shape, holidays and rooftop-solar dips, but **its results say nothing
@@ -76,6 +82,32 @@ start after that.
 | `chronos` | Chronos-2 on load history only |
 | `chronos_wx_fx` | Chronos-2 with the weather forecast as known-future inputs |
 | `chronos_wx_actual` | Chronos-2 with the actual weather. **An upper bound only, not achievable live** |
+| `chronos_feat_fx` | Chronos-2 with the weather forecast **plus derived inputs**: cooling and heating degree-hours (temperature above 65°F / below 55°F, configurable), weekend and holiday flags |
+| `regression_trend_fx` | `regression_fx` plus a linear time trend (load growth) and a holiday flag |
+| `avg_chronos_reg` | Equal-weight average of `chronos_feat_fx` and `regression_trend_fx`. On extreme days the two tend to err in opposite directions, so the average can beat both |
+
+### Inputs that matter
+
+- **Degree-hours, not just temperature.** Load bends sharply once air conditioning or heating
+  kicks in. Foundation models take their inputs roughly linearly, so give them the bend
+  directly (`features.cool_base_f`, `features.heat_base_f`).
+- **The weather model.** Open-Meteo's `best_match` is not always the most accurate model for a
+  site. `weather.forecast_models` takes one or more models; several are averaged hour by hour.
+- **Data delay.** Set `lags_hours` to how late your meter data really arrives.
+
+### Comparing foundation models (`compare_models.py`)
+
+Each model runs two ways, so models with and without weather-input support compete fairly:
+
+| Mode | What the model sees |
+|---|---|
+| `<model>_feat` | Load history plus weather, degree-hours and calendar as known inputs (models that accept them) |
+| `<model>_resid` | Only what is left after the `regression_trend_fx` baseline; the baseline is added back. Any model can run this way |
+
+It also reports the baseline alone, the average of every `_feat` model (`avg_feat`) and that
+average blended with the regression (`avg_feat_reg`). All weights are fixed and equal, chosen
+before scoring. The summary gives error by forecast day (1–7), daily-peak error on all days and
+on the top 10% of days, and the 10–90% range coverage.
 
 ## What it reports
 
@@ -92,11 +124,15 @@ start after that.
 
 ## Known limitations
 
-- **No holiday input.** Holidays are not yet passed to the models.
+- **US holidays only.** Set `features.holidays: none` elsewhere, or extend `common.us_holidays`.
 - **Single-point weather.** One weather point represents the whole service area.
-- **One foundation model.** Others (TimesFM, Moirai, TiRex) are not yet wired in.
+- **Seven days ahead at most.** The weather-forecast archive keeps leads 1–7 only, so forecasts
+  beyond a week can't be tested honestly from it.
+- **Record days.** Forecasts built from recent history tend to run low on days hotter than
+  anything in their context. The averages help; nothing here solves it.
 - **Simple baselines.** A tuned gradient-boosting model would be a stronger one.
 - **Forecasts run in calendar days from local midnight.**
+- **Windows:** see the practical notes in [MODELS.md](MODELS.md).
 
 ## Related work
 
@@ -116,7 +152,8 @@ start after that.
 ## Data sources and licences
 
 - **This repository:** MIT (see `LICENSE`).
-- **Chronos-2:** Apache-2.0, downloaded from Hugging Face on first run.
+- **Chronos-2:** Apache-2.0, downloaded from Hugging Face on first run. The other models' licences
+  differ, and some exclude production use: see [MODELS.md](MODELS.md).
 - **Weather:** [Open-Meteo](https://open-meteo.com/), data licensed **CC BY 4.0**, and
   attribution is required in anything you publish. Open-Meteo's free API is for non-commercial use;
   check [their terms](https://open-meteo.com/en/terms) for yours. Underlying weather models carry

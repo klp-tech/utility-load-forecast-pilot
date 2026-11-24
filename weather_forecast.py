@@ -7,6 +7,10 @@ weather information published before its origin. This is what a live system woul
 Feeding models the weather that actually happened (reanalysis) instead is a common, optimistic
 mistake.
 
+`weather.forecast_models` picks the weather model(s). With more than one, their forecasts are
+averaged hour by hour. The default `best_match` is Open-Meteo's automatic choice, which is not
+always the most accurate model for a site: compare candidates against a nearby airport station.
+
 Output: data.forecast_csv -> ts, then <var>_d<K> for K = 1..7
 """
 from __future__ import annotations
@@ -23,10 +27,10 @@ URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 LEADS = range(1, 8)
 
 
-def fetch(lat, lon, start: date, end: date) -> pd.DataFrame:
+def fetch(lat, lon, start: date, end: date, model: str = "best_match") -> pd.DataFrame:
     hourly = [f"{v}_previous_day{k}" for v in OPEN_METEO_VARS for k in LEADS]
     r = requests.get(URL, timeout=180, params={
-        "latitude": lat, "longitude": lon, "hourly": ",".join(hourly),
+        "latitude": lat, "longitude": lon, "hourly": ",".join(hourly), "models": model,
         "temperature_unit": "fahrenheit", "timezone": "GMT",
         "start_date": start.isoformat(), "end_date": end.isoformat()})
     r.raise_for_status()
@@ -40,15 +44,20 @@ def main() -> None:
     cfg = load_config(ap.parse_args().config)
     s = cfg["site"]
     start, end = date.fromisoformat(cfg["weather"]["forecast_start"]), date.today() - timedelta(days=1)
-    parts, a = [], start
-    while a <= end:  # quarter-sized requests: 28 series x ~2,200 h
-        b = min(a + timedelta(days=91), end)
-        print(f"fetching {a} .. {b}")
-        parts.append(fetch(s["latitude"], s["longitude"], a, b))
-        a = b + timedelta(days=1)
-    df = pd.concat(parts, ignore_index=True).drop_duplicates("time")
-    cols = [c for c in df.columns if c != "time"]
-    h = utc_to_local_hourly(df, "time", cols, s["timezone"])
+    models = cfg["weather"].get("forecast_models", ["best_match"])
+    per_model = []
+    for m in models:
+        parts, a = [], start
+        while a <= end:  # quarter-sized requests: 28 series x ~2,200 h
+            b = min(a + timedelta(days=91), end)
+            print(f"{m}: fetching {a} .. {b}")
+            parts.append(fetch(s["latitude"], s["longitude"], a, b, m))
+            a = b + timedelta(days=1)
+        df = pd.concat(parts, ignore_index=True).drop_duplicates("time")
+        cols = [c for c in df.columns if c != "time"]
+        per_model.append(utc_to_local_hourly(df, "time", cols, s["timezone"]))
+    # Several models: hour-by-hour mean (an hour one model lacks uses the others).
+    h = pd.concat(per_model).groupby(level=0).mean() if len(per_model) > 1 else per_model[0]
     out = p(cfg, cfg["data"]["forecast_csv"])
     out.parent.mkdir(parents=True, exist_ok=True)
     h.round(2).to_csv(out)
